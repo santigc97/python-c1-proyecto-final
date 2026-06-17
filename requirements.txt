@@ -1,0 +1,15 @@
+requests
+responses
+pybikes
+pandas
+matplotlib
+pytest
+Flask
+Jinja2
+scipy
+numpy
+pillow
+pymongo
+flask-sqlalchemy
+PyJWT
+jsonschema
