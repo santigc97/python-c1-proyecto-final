@@ -12,3 +12,5 @@ services:
       - "5001:5001"
     depends_on:
       - odontocare_api
+    environment:
+      - MAIN_API_URL=http://odontocare_api:5000

@@ -1,9 +1,14 @@
+import os
+import requests as req
 from flask import Blueprint, request, jsonify, current_app
 from functools import wraps
 import jwt
 from models import db, Cita
 
 citas_bp = Blueprint('citas_bp', __name__)
+
+# url del servicio principal (se puede cambiar con variable de entorno)
+MAIN_API = os.environ.get('MAIN_API_URL', 'http://localhost:5000')
 
 
 def token_requerido(f):
@@ -33,6 +38,25 @@ def crear_cita(payload):
 
     if not datos or 'fecha' not in datos or 'id_paciente' not in datos or 'id_doctor' not in datos or 'id_centro' not in datos:
         return jsonify({'error': 'Faltan campos: fecha, id_paciente, id_doctor, id_centro'}), 400
+
+    cabeceras = {'Authorization': request.headers.get('Authorization')}
+
+    # verifico que el paciente existe y esta activo consultando el otro servicio
+    r = req.get(f'{MAIN_API}/admin/pacientes/{datos["id_paciente"]}', headers=cabeceras)
+    if r.status_code != 200:
+        return jsonify({'error': 'Paciente no encontrado'}), 400
+    if r.json().get('estado') != 'ACTIVO':
+        return jsonify({'error': 'El paciente no está activo'}), 400
+
+    # verifico que el doctor existe
+    r = req.get(f'{MAIN_API}/admin/doctores/{datos["id_doctor"]}', headers=cabeceras)
+    if r.status_code != 200:
+        return jsonify({'error': 'Doctor no encontrado'}), 400
+
+    # verifico que el centro existe
+    r = req.get(f'{MAIN_API}/admin/centros/{datos["id_centro"]}', headers=cabeceras)
+    if r.status_code != 200:
+        return jsonify({'error': 'Centro no encontrado'}), 400
 
     # compruebo que el doctor no tenga ya una cita a esa hora
     cita_existente = Cita.query.filter_by(id_doctor=datos['id_doctor'], fecha=datos['fecha'], estado='PROGRAMADA').first()
@@ -70,14 +94,34 @@ def crear_cita(payload):
 def obtener_citas(payload):
     rol = payload['rol']
 
-    # filtro segun el rol
-    if rol in ['admin', 'secretaria']:
-        citas = Cita.query.all()
-    elif rol == 'medico':
-        citas = Cita.query.filter_by(id_usuario_registra=payload['id']).all()
-    else:
-        citas = Cita.query.filter_by(id_paciente=payload['id']).all()
+    # recojo los filtros que vengan por query params
+    fecha = request.args.get('fecha')
+    id_doctor = request.args.get('id_doctor')
+    id_centro = request.args.get('id_centro')
+    id_paciente = request.args.get('id_paciente')
+    estado = request.args.get('estado')
 
+    query = Cita.query
+
+    if rol == 'medico':
+        query = query.filter_by(id_usuario_registra=payload['id'])
+    elif rol == 'secretaria':
+        if fecha:
+            query = query.filter(Cita.fecha.like(f'{fecha}%'))
+    else:
+        # admin puede filtrar por todo
+        if id_doctor:
+            query = query.filter_by(id_doctor=int(id_doctor))
+        if id_centro:
+            query = query.filter_by(id_centro=int(id_centro))
+        if id_paciente:
+            query = query.filter_by(id_paciente=int(id_paciente))
+        if estado:
+            query = query.filter_by(estado=estado)
+        if fecha:
+            query = query.filter(Cita.fecha.like(f'{fecha}%'))
+
+    citas = query.all()
     return jsonify([{
         'id': c.id,
         'fecha': c.fecha,
@@ -92,6 +136,10 @@ def obtener_citas(payload):
 @citas_bp.route('/citas/<int:id>', methods=['PUT'])
 @token_requerido
 def cancelar_cita(payload, id):
+    # solo secretaria y admin pueden cancelar
+    if payload['rol'] not in ['admin', 'secretaria']:
+        return jsonify({'mensaje': 'Acceso denegado'}), 403
+
     cita = Cita.query.get_or_404(id)
 
     if cita.estado == 'CANCELADA':
